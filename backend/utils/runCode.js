@@ -1,10 +1,34 @@
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
-const TIMEOUT_MS = 10000; // 10 seconds
+const TIMEOUT_MS = 15000; // 15 seconds (extra time for compiled languages)
+
+// Install instructions for each runtime
+const INSTALL_INSTRUCTIONS = {
+  java:  'Download from https://adoptium.net or run: winget install EclipseAdoptium.Temurin.21.JDK',
+  javac: 'Download JDK from https://adoptium.net or run: winget install EclipseAdoptium.Temurin.21.JDK',
+  ruby:  'Download from https://rubyinstaller.org or run: winget install RubyInstallerTeam.Ruby.3.3',
+  go:    'Download from https://go.dev/dl or run: winget install GoLang.Go',
+  php:   'Download from https://windows.php.net/download or run: winget install PHP.PHP',
+  gcc:   'Install MinGW-w64 from https://www.mingw-w64.org or run: winget install MSYS2.MSYS2',
+  'g++': 'Install MinGW-w64 from https://www.mingw-w64.org or run: winget install MSYS2.MSYS2',
+};
+
+// Cache for runtime availability checks
+const runtimeCache = {};
+function isRuntimeAvailable(cmd) {
+  if (runtimeCache[cmd] !== undefined) return runtimeCache[cmd];
+  try {
+    execSync(`${process.platform === 'win32' ? 'where' : 'which'} ${cmd}`, { stdio: 'ignore' });
+    runtimeCache[cmd] = true;
+  } catch {
+    runtimeCache[cmd] = false;
+  }
+  return runtimeCache[cmd];
+}
 
 // Ensure temp directory exists
 if (!fs.existsSync(TEMP_DIR)) {
@@ -28,7 +52,7 @@ const LANGUAGE_CONFIG = {
   },
   typescript: {
     ext: 'ts',
-    getCommand: (file) => ['npx', ['--yes', 'ts-node', '--transpile-only', file]],
+    getCommand: (file) => ['node', ['--experimental-strip-types', '--no-warnings', file]],
   },
   java: {
     ext: 'java',
@@ -108,7 +132,7 @@ function executeCommand(cmd, args, options = {}) {
         return resolve({
           success: false,
           stdout,
-          stderr: 'Execution timed out (10 second limit exceeded)',
+          stderr: 'Execution timed out (15 second limit exceeded)',
           exitCode: -1,
           executionTime,
         });
@@ -124,12 +148,19 @@ function executeCommand(cmd, args, options = {}) {
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      let errorMsg = err.message;
+      if (err.message.includes('ENOENT') || err.code === 'ENOENT') {
+        const installHint = INSTALL_INSTRUCTIONS[cmd] || '';
+        errorMsg = `'${cmd}' is not installed or not in PATH.`;
+        if (installHint) {
+          errorMsg += `\n\nTo install: ${installHint}`;
+        }
+        errorMsg += `\n\nAfter installing, restart the server.`;
+      }
       resolve({
         success: false,
         stdout: '',
-        stderr: err.message.includes('ENOENT')
-          ? `'${cmd}' is not installed or not in PATH. Please install it to run ${cmd} code.`
-          : err.message,
+        stderr: errorMsg,
         exitCode: -1,
         executionTime: Date.now() - startTime,
       });
@@ -158,6 +189,21 @@ const runCode = async (language, code, stdin = '') => {
   }
 
   const id = uniqueId();
+
+  // ── Pre-check: verify runtime is available ──────────────────────────────
+  const RUNTIME_CHECK = {
+    javascript: 'node', python: 'python', typescript: 'node',
+    java: 'javac', c: 'gcc', cpp: 'g++',
+    go: 'go', php: 'php', ruby: 'ruby',
+  };
+  const requiredCmd = RUNTIME_CHECK[language];
+  if (requiredCmd && !isRuntimeAvailable(requiredCmd)) {
+    const hint = INSTALL_INSTRUCTIONS[requiredCmd] || '';
+    let msg = `'${requiredCmd}' is not installed or not in PATH. Cannot run ${language} code.`;
+    if (hint) msg += `\n\nTo install: ${hint}`;
+    msg += `\nAfter installing, restart the server.`;
+    return { success: false, output: '', error: msg, executionTime: 0, exitCode: -1 };
+  }
 
   // ── JavaScript ──────────────────────────────────────────────────────────
   if (language === 'javascript') {
