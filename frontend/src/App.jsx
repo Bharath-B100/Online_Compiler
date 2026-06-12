@@ -22,7 +22,7 @@ const DEFAULT_CODE = {
   ruby:       `# Ruby — CodeForge\nputs "Hello, World!"\ndef fibonacci(n)\n  return n if n <= 1\n  fibonacci(n-1) + fibonacci(n-2)\nend\nputs "Fibonacci(10): #{fibonacci(10)}"`,
 };
 
-const API = 'http://localhost:5001/api/execute';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:5001/api/execute';
 const HISTORY_KEY = 'codeforge_history';
 const MAX_HISTORY = 15;
 
